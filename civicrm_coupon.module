@@ -1,0 +1,861 @@
+<?php
+
+// $Id$
+/**
+ * @file civicrm_coupon.module
+ * Provides discount coupons for CiviCRM.
+ *
+ * Code for Coupon forms by Blake Lucchesi (www.boldsource.com) (http://drupal.org/project/uc_coupon)
+ * Maintained by David Long (dave@longwaveconsulting.com)
+ *
+ * Integration of coupons with CiviCRM by Siva Kumar Epari
+ *
+ */
+
+/**
+ * Implementation of hook_menu().
+ */
+function civicrm_coupon_menu() {
+  $items = array();
+
+  $items['admin/settings/coupon'] = array(
+      'title' => 'Coupons',
+      'description' => 'Manage store discount coupons.',
+      'page callback' => 'civicrm_coupon_display',
+      'page arguments' => array('active'),
+      'access arguments' => array('view coupons'),
+      'type' => MENU_NORMAL_ITEM,
+  );
+  $items['admin/settings/coupon/list'] = array(
+      'title' => 'Active coupons',
+      'description' => 'View active coupons.',
+      'page callback' => 'civicrm_coupon_display',
+      'page arguments' => array('active'),
+      'access arguments' => array('view coupons'),
+      'type' => MENU_DEFAULT_LOCAL_TASK,
+  );
+  $items['admin/settings/coupon/inactive'] = array(
+      'title' => 'Inactive coupons',
+      'description' => 'View inactive coupons.',
+      'page callback' => 'civicrm_coupon_display',
+      'page arguments' => array('inactive'),
+      'access arguments' => array('view coupons'),
+      'type' => MENU_LOCAL_TASK,
+  );
+  $items['admin/settings/coupon/add'] = array(
+      'title' => 'Add new coupon',
+      'description' => 'Add a new coupon.',
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('civicrm_coupon_add_form', 'add'),
+      'access arguments' => array('manage coupons'),
+      'type' => MENU_LOCAL_TASK,
+      'weight' => 10,
+  );
+  $items['admin/settings/coupon/reports'] = array(
+      'title' => 'Usage reports',
+      'description' => 'View coupon usage reports.',
+      'page callback' => 'civicrm_coupon_reports',
+      'access arguments' => array('view reports'),
+      'type' => MENU_LOCAL_TASK,
+  );
+  $items['admin/settings/coupon/%civicrm_coupon/edit'] = array(
+      'title' => 'Edit coupon',
+      'description' => 'Edit an existing coupon.',
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('civicrm_coupon_add_form', 'edit', 3),
+      'access arguments' => array('manage coupons'),
+      'type' => MENU_CALLBACK,
+  );
+  $items['admin/settings/coupon/%civicrm_coupon/delete'] = array(
+      'title' => 'Delete coupon',
+      'description' => 'Delete a coupon.',
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('civicrm_coupon_delete_confirm', 3),
+      'access arguments' => array('manage coupons'),
+      'type' => MENU_CALLBACK,
+  );
+  $items['admin/settings/coupon/%civicrm_coupon/codes'] = array(
+      'title' => 'Download bulk coupon codes',
+      'description' => 'Download the list of bulk coupon codes as a CSV file.',
+      'page callback' => 'civicrm_coupon_codes_csv',
+      'page arguments' => array(3),
+      'access arguments' => array('manage coupons'),
+      'type' => MENU_CALLBACK,
+  );
+  $items['civicrm_coupon/autocomplete/user'] = array(
+      'title' => 'User autocomplete',
+      'page callback' => 'civicrm_coupon_autocomplete_user',
+      'access arguments' => array('manage coupons'),
+      'type' => MENU_CALLBACK,
+  );
+  $items['civicrm_coupon/autocomplete/role'] = array(
+      'title' => 'Role autocomplete',
+      'page callback' => 'civicrm_coupon_autocomplete_role',
+      'access arguments' => array('manage coupons'),
+      'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Implementation of hook_perm().
+ */
+function civicrm_coupon_perm() {
+  return array('view coupons', 'manage coupons', 'view reports');
+}
+
+/**
+ * Display a brief over view of system coupons
+ *
+ * @param $view_type
+ *   pass in an argument to filter out active/inactive coupons
+ */
+function civicrm_coupon_display($view_type = 'active') {
+
+  $header[] = array('data' => t('Name'), 'field' => 'name');
+  $header[] = array('data' => t('Code'), 'field' => 'code', 'sort' => 'asc');
+  $header[] = array('data' => t('Value'), 'field' => 'value');
+  $header[] = array('data' => t('Valid until'), 'field' => 'valid_until');
+  $header[] = array('data' => t('Actions'));
+
+  $result = pager_query('SELECT cid, name, value, code, type, valid_until, bulk FROM {civicrm_coupons} WHERE status = %d' . tablesort_sql($header), 20, 0, NULL, $view_type == 'inactive' ? 0 : 1);
+  $rows = array();
+  while ($row = db_fetch_object($result)) {
+    if ($row->type == 'percentage') {
+      $value = $row->value . '%';
+    } else {
+      $value = civi_currency_format($row->value);
+    }
+
+    $code = $row->code;
+    $actions = l(t('edit'), "admin/settings/coupon/$row->cid/edit");
+    if ($row->bulk) {
+      $code .= '* ' . t('(bulk)');
+      $actions .= ' ' . l(t('codes'), "admin/settings/coupon/$row->cid/codes");
+    }
+    $actions .= ' ' . l(t('delete'), "admin/settings/coupon/$row->cid/delete");
+
+    $rows[] = array($row->name, $code, $value, format_date($row->valid_until, 'custom', 'm/d/Y'), $actions);
+  }
+
+  if (count($rows)) {
+    $output = theme('table', $header, $rows, array('width' => '100%'));
+    $output .= theme('pager', NULL, 20);
+  } else {
+    $output = '<p>' . t('There are currently no !type coupons in the system.', array('!type' => $view_type)) . '</p>';
+  }
+
+  return $output;
+}
+
+/**
+ *  Form builder for product attributes.
+ *
+ * @param $action string
+ * Form action, edit or add. 'edit' loads default values.
+ *
+ * @param $coupon object
+ * Coupon, used to load defaults when $action = 'edit'
+ */
+function civicrm_coupon_add_form($form_state, $action, $coupon = NULL) {
+
+  if ($action == 'edit') {
+    $value = $coupon;
+    $used = db_result(db_query("SELECT COUNT(*) FROM {civicrm_coupons_orders} WHERE cid = %d", $value->cid));
+    $form['#civicrm_coupon_cid'] = $value->cid;
+    $form['#civicrm_coupon'] = $value;
+    $form['#civicrm_coupon_used'] = $used;
+  } else {
+    $value->valid_until = time();
+    $value->minimum_order = 0;
+    $value->max_uses = 0;
+    $used = 0;
+  }
+
+  $value->valid_until = array('year' => format_date($value->valid_until, 'custom', 'Y'), 'month' => format_date($value->valid_until, 'custom', 'n'), 'day' => format_date($value->valid_until, 'custom', 'j'));
+
+  $form['name'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Coupon name'),
+      '#default_value' => $value->name,
+      '#required' => TRUE,
+  );
+
+  $form['code'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Coupon code'),
+      '#description' => t('Coupon codes cannot be changed once they have been used in an order.'),
+      '#default_value' => $value->code,
+      '#size' => 25,
+      '#required' => !$used,
+      '#maxlength' => 14,
+      '#disabled' => $used,
+  );
+
+  $form['bulk'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Bulk coupon codes'),
+      '#description' => t('The coupon code entered above will be used to prefix each generated code.'),
+      '#collapsible' => TRUE,
+      '#collapsed' => !$value->bulk,
+  );
+
+  if (!$used) {
+    $form['bulk']['bulk_generate'] = array(
+        '#type' => 'checkbox',
+        '#title' => t('Enable bulk generation of coupon codes.'),
+        '#default_value' => $value->bulk,
+        '#disabled' => $used,
+    );
+  } else {
+    $form['bulk']['bulk_generate'] = array(
+        '#type' => 'value',
+        '#default_value' => $value->bulk,
+    );
+  }
+
+  $form['bulk']['bulk_number'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Number of codes to generate'),
+      '#default_value' => $value->data['bulk_number'],
+      '#size' => 10,
+      '#maxlength' => 10,
+      '#disabled' => $used,
+  );
+
+  $form['bulk']['bulk_length'] = array(
+      '#type' => 'select',
+      '#title' => t('Code length'),
+      '#description' => t('The number of characters selected here will be appended to the coupon code entered above..'),
+      '#default_value' => $value->data['bulk_length'],
+      '#options' => drupal_map_assoc(range(8, 30)),
+      '#disabled' => $used,
+  );
+
+  $form['valid_until'] = array(
+      '#type' => 'date',
+      '#title' => t('Expiry date'),
+      '#default_value' => $value->valid_until,
+      '#required' => TRUE,
+      '#after_build' => array('_civicrm_coupon_date_range'),
+  );
+
+  $form['status'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Active'),
+      '#description' => t('Check to enable the coupon, uncheck to disable the coupon.'),
+      '#default_value' => $value->status,
+  );
+
+  $form['type'] = array(
+      '#type' => 'select',
+      '#title' => t('Discount type'),
+      '#default_value' => $value->type,
+      '#options' => array(
+          'percentage' => 'Percentage',
+          'price' => 'Price'
+      ),
+  );
+
+  $form['value'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Discount value'),
+      '#default_value' => $value->value,
+      '#size' => 10,
+      '#description' => t('Enter values without symbols, for 15%, enter "15" and choose Percentage as the discount type.'),
+      '#required' => TRUE,
+  );
+
+  $form['minimum_order'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Minimum order limit'),
+      '#default_value' => $value->minimum_order,
+      '#size' => 10,
+      '#description' => t('A minimum order total that applies to the coupon, or 0 for no minimum order limit.'),
+      '#required' => TRUE,
+  );
+
+  $form['max_uses'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Maximum number of redemptions (per code)'),
+      '#default_value' => $value->max_uses,
+      '#description' => t('Enter the maximum number of times each code for this coupon can be used, or 0 for unlimited.'),
+      '#size' => 5,
+      '#required' => TRUE,
+  );
+
+  $form['max_uses_per_user'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Maximum number of redemptions (per user)'),
+      '#default_value' => isset($value->data['max_uses_per_user']) ? $value->data['max_uses_per_user'] : 0,
+      '#description' => t('Enter the maximum number of times this coupon can be used by a single user, or 0 for unlimited.'),
+      '#size' => 5,
+      '#required' => TRUE,
+  );
+
+  $form['users'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('User restrictions'),
+      '#description' => t('Enter one or more user names and/or "anonymous users" below to make this coupon valid only for those users.'),
+      '#tree' => TRUE,
+      '#collapsible' => TRUE,
+      '#collapsed' => !isset($value->data['users']),
+  );
+
+  if (isset($value->data['users'])) {
+    foreach ($value->data['users'] as $uid) {
+      $username = $uid ? db_result(db_query('SELECT name FROM {users} WHERE uid = %d', $uid)) : t('anonymous users');
+      $form['users'][] = array(
+          '#type' => 'textfield',
+          '#default_value' => $username . ' [uid:' . $uid . ']',
+          '#autocomplete_path' => 'civicrm_coupon/autocomplete/user',
+      );
+    }
+  }
+
+  for ($i = 0; $i < 3; $i++) {
+    $form['users'][] = array(
+        '#type' => 'textfield',
+        '#autocomplete_path' => 'civicrm_coupon/autocomplete/user',
+    );
+  }
+
+  $form['roles'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Role restrictions'),
+      '#description' => t('Enter one or more role names below to make this coupon valid only for users with those roles.'),
+      '#tree' => TRUE,
+      '#collapsible' => TRUE,
+      '#collapsed' => !isset($value->data['roles']),
+  );
+
+  if (isset($value->data['roles'])) {
+    foreach ($value->data['roles'] as $role) {
+      $form['roles'][] = array(
+          '#type' => 'textfield',
+          '#default_value' => $role,
+          '#autocomplete_path' => 'civicrm_coupon/autocomplete/role',
+      );
+    }
+  }
+
+  for ($i = 0; $i < 3; $i++) {
+    $form['roles'][] = array(
+        '#type' => 'textfield',
+        '#autocomplete_path' => 'civicrm_coupon/autocomplete/role',
+    );
+  }
+
+  $form['submit'] = array('#type' => 'submit', '#value' => t('Submit'));
+
+  return $form;
+}
+
+/**
+ * Coupon form validate handler.
+ */
+function civicrm_coupon_add_form_validate($form, &$form_state) {
+  // check to ensure a unique coupon code
+  $name = db_result(db_query("SELECT name FROM {civicrm_coupons} WHERE code = '%s' AND cid <> %d", strtoupper($form_state['values']['code']), $form['#civicrm_coupon_cid']));
+  if ($name) {
+    form_set_error('code', t('Coupon code already used by %name.', array('%name' => $name)));
+  }
+
+  foreach ($form_state['values']['users'] as $key => $user) {
+    if ($user && !preg_match('/\[uid:(\d+)\]$/', $user)) {
+      form_set_error('users][' . $key, t('User names must include the user ID.'));
+    }
+  }
+
+  if (!$form['#civicrm_coupon_used'] && $form_state['values']['bulk_generate'] && intval($form_state['values']['bulk_number']) <= 0) {
+    form_set_error('bulk_number', t('You must specify the number of codes to generate.'));
+  }
+}
+
+/**
+ * Coupon form submit handler.
+ */
+function civicrm_coupon_add_form_submit($form, &$form_state) {
+  // If the coupon was previously used, reset disabled textfields to their original values.
+  if ($form['#civicrm_coupon_used']) {
+    $form_state['values']['code'] = $form['#civicrm_coupon']->code;
+    $form_state['values']['bulk_number'] = $form['#civicrm_coupon']->data['bulk_number'];
+  }
+
+  $code = strtoupper($form_state['values']['code']);
+  $valid_until = mktime(0, 0, 0, $form_state['values']['valid_until']['month'], $form_state['values']['valid_until']['day'], $form_state['values']['valid_until']['year']);
+  $data = array();
+
+  if ($form_state['values']['bulk_generate']) {
+    $data['bulk_number'] = $form_state['values']['bulk_number'];
+    $data['bulk_length'] = $form_state['values']['bulk_length'];
+  }
+
+  if ($form_state['values']['max_uses_per_user']) {
+    $data['max_uses_per_user'] = $form_state['values']['max_uses_per_user'];
+  }
+
+  foreach ($form_state['values']['users'] as $key => $user) {
+    if ($user && preg_match('/\[uid:(\d+)\]$/', $user, $matches)) {
+      $data['users'][] = $matches[1];
+    }
+  }
+
+  foreach ($form_state['values']['roles'] as $role) {
+    if ($role) {
+      $data['roles'][] = $role;
+    }
+  }
+
+  if (!isset($form['#civicrm_coupon_cid'])) {
+    // Only set bulk coupon seed once.
+    db_query("INSERT INTO {civicrm_coupons} (name, code, value, type, status, valid_until, max_uses, minimum_order, data, bulk, bulk_seed) VALUES ('%s', '%s', %f, '%s', %d, %d, %d, %d, '%s', %d, '%s')", $form_state['values']['name'], $code, $form_state['values']['value'], $form_state['values']['type'], $form_state['values']['status'], $valid_until, $form_state['values']['max_uses'], $form_state['values']['minimum_order'], serialize($data), $form_state['values']['bulk_generate'], md5(uniqid()));
+    drupal_set_message(t('Coupon %name has been created.', array('%name' => $form_state['values']['name'])));
+  } else {
+    db_query("UPDATE {civicrm_coupons} SET name = '%s', code = '%s', value = %f, type = '%s', status = %d, valid_until = %d, max_uses = %d, minimum_order = %d, data = '%s', bulk = %d WHERE cid = %d", $form_state['values']['name'], $code, $form_state['values']['value'], $form_state['values']['type'], $form_state['values']['status'], $valid_until, $form_state['values']['max_uses'], $form_state['values']['minimum_order'], serialize($data), $form_state['values']['bulk_generate'], $form['#civicrm_coupon_cid']);
+    drupal_set_message(t('Coupon %name has been updated.', array('%name' => $form_state['values']['name'])));
+  }
+
+  $form_state['redirect'] = 'admin/settings/coupon';
+}
+
+/**
+ * Load a coupon into the form for editing
+ *
+ * @param $cid
+ *  Unique coupon ID.
+ *
+ * @return $coupon
+ *  Returns a coupon object.
+ */
+function civicrm_coupon_load($cid) {
+  $coupon = db_fetch_object(db_query("SELECT * FROM {civicrm_coupons} WHERE cid = %d", $cid));
+  if ($coupon->data) {
+    $coupon->data = unserialize($coupon->data);
+  }
+  return $coupon;
+}
+
+/**
+ * Delete coupon confirm form
+ *
+ * @param $cid int
+ * Coupon ID.
+ *
+ * @return $confirm
+ *  Return a drupal confirm form.
+ */
+function civicrm_coupon_delete_confirm(&$form_state, $coupon) {
+  $form['#civicrm_coupon_cid'] = $coupon->cid;
+  return confirm_form($form, t('Are you sure you want to delete coupon %name with code %code?', array('%name' => $coupon->name, '%code' => $coupon->code)), 'admin/settings/coupon', t('This action cannot be undone. Deleting this coupon will remove all records of past uses as well.'), t('Delete'));
+}
+
+function civicrm_coupon_delete_confirm_submit($form, &$form_state) {
+  $coupon = civicrm_coupon_load($form['#civicrm_coupon_cid']);
+
+  db_query("DELETE FROM {civicrm_coupons} WHERE cid = %d", $form['#civicrm_coupon_cid']);
+  //db_query("DELETE FROM {civicrm_coupons_orders} WHERE cid = %d", $form['#civicrm_coupon_cid']);
+
+  drupal_set_message(t('Coupon %name has been deleted.', array('%name' => $coupon->name)));
+  $form_state['redirect'] = 'admin/settings/coupon' . ($coupon->status ? '' : '/inactive');
+}
+
+/**
+ * Generate a list of bulk coupon codes.
+ */
+function civicrm_coupon_codes_csv($coupon = NULL) {
+  if (!$coupon->bulk) {
+    drupal_not_found();
+    return;
+  }
+
+  header('Content-Type: application/octet-stream');
+  header('Content-Disposition: attachment; filename="' . $coupon->code . '.csv";');
+
+  for ($id = 0; $id < $coupon->data['bulk_number']; $id++) {
+    echo civicrm_coupon_get_bulk_code($coupon, $id) . "\n";
+  }
+  exit;
+}
+
+/**
+ * Generate a single bulk coupon code.
+ */
+function civicrm_coupon_get_bulk_code($coupon, $id) {
+  $id = str_pad(dechex($id), strlen(dechex($coupon->data['bulk_number'])), '0', STR_PAD_LEFT);
+  $length = strlen($coupon->code) + $coupon->data['bulk_length'];
+  return strtoupper(substr($coupon->code . $id . md5($coupon->bulk_seed . $id), 0, $length));
+}
+
+/**
+ * Load a coupon (single or bulk) from the supplied code.
+ */
+function civicrm_coupon_find($code) {
+  // Look for matching single coupon first.
+  $coupon = db_fetch_object(db_query("SELECT * FROM {civicrm_coupons} WHERE code = '%s' AND status = 1 AND bulk = 0 AND valid_until > %d", $code, time()));
+  if ($coupon !== FALSE) {
+    if ($coupon->data) {
+      $coupon->data = unserialize($coupon->data);
+    }
+    return $coupon;
+  }
+
+  // Look through bulk coupons.
+  $result = db_query("SELECT * FROM {civicrm_coupons} WHERE status = 1 AND bulk = 1 AND valid_until > %d", time());
+  while ($coupon = db_fetch_object($result)) {
+    // Check coupon prefix.
+    $prefix_length = strlen($coupon->code);
+    if (substr($code, 0, $prefix_length) != $coupon->code) {
+      continue;
+    }
+
+    if ($coupon->data) {
+      $coupon->data = unserialize($coupon->data);
+    }
+
+    // Check coupon sequence ID.
+    $id = substr($code, $prefix_length, strlen(dechex($coupon->data['bulk_number'])));
+    if (!preg_match("/^[0-9A-F]+$/", $id)) {
+      continue;
+    }
+    $id = hexdec($id);
+    if ($id < 0 || $id > $coupon->data['bulk_number']) {
+      continue;
+    }
+
+    // Check complete coupon code.
+    if ($code == civicrm_coupon_get_bulk_code($coupon, $id)) {
+      return $coupon;
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+ * Validate a coupon and calculate the coupon amount against the current cart contents.
+ *
+ * @param $code
+ *  The coupon code entered at the checkout screen
+ *
+ * @return
+ *  Returns a coupon result object with details about the validation
+ */
+function civicrm_coupon_validation($code) {
+  global $user;
+
+  $result->valid = FALSE;
+
+  $code = strtoupper($code);
+  $coupon = civicrm_coupon_find($code);
+
+  if (!$coupon) {
+    $result->message = t('This coupon code is invalid or has expired.');
+    return $result;
+  }
+
+  //  CHECK MAX USES
+  if ($coupon->max_uses > 0) {
+    $used = db_result(db_query("SELECT COUNT(*) FROM {civicrm_coupons_orders} AS uco LEFT JOIN {civicrm_contribution} AS uo ON uco.oid = uo.id WHERE uco.cid = %d AND uco.code = '%s'", $coupon->cid, $code));
+    if ($used >= $coupon->max_uses) {
+      $result->message = t('This coupon has reached the maximum redemption limit.');
+      return $result;
+    }
+  }
+
+  //  CHECK MAX USES PER USER
+  if (isset($coupon->data['max_uses_per_user'])) {
+    $used = db_result(db_query("SELECT COUNT(*) FROM {civicrm_coupons_orders} AS uco LEFT JOIN {civicrm_contribution} AS uo ON uco.oid = uo.id WHERE uco.cid = %d AND uo.contact_id = %d", $coupon->cid, $user->uid));
+    if ($used >= $coupon->data['max_uses_per_user']) {
+      $result->message = t('This coupon has reached the maximum redemption limit.');
+      return $result;
+    }
+  }
+
+  //  CHECK USER ID
+  if (isset($coupon->data['users'])) {
+    if (!in_array("$user->uid", $coupon->data['users'], TRUE)) {
+      $result->message = t('Your user ID is not allowed to use this coupon.');
+      return $result;
+    }
+  }
+
+  // CHECK ROLES
+  if (isset($coupon->data['roles'])) {
+    $role_found = FALSE;
+    foreach ($coupon->data['roles'] as $role) {
+      if (in_array($role, $user->roles)) {
+        $role_found = TRUE;
+        break;
+      }
+    }
+    if (!$role_found) {
+      $result->message = t('You do not have the correct permission to use this coupon.');
+      return $result;
+    }
+  }
+
+  $result->valid = TRUE;
+  $result->code = $code;
+  $result->cid = $coupon->cid;
+  $result->title = t('Coupon: @code', array('@code' => $code));
+  $result->value = $coupon->value;
+  $result->type = $coupon->type;
+  $result->name = $coupon->name;
+
+  return $result;
+}
+
+function _civicrm_coupon_date_range($form_element) {
+  $form_element['year']['#options'] = drupal_map_assoc(range(2008, 2020));
+  return $form_element;
+}
+
+function civicrm_coupon_autocomplete_user($string) {
+  $matches = array();
+  $anonymous = t('anonymous users');
+  if (strpos($anonymous, $string) !== FALSE) {
+    $matches[$anonymous . ' [uid:0]'] = $anonymous;
+  }
+
+  $result = db_query_range("SELECT uid, name FROM {users} WHERE name LIKE '%%%s%'", $string, 0, 10);
+  while ($row = db_fetch_object($result)) {
+    $matches[$row->name . ' [uid:' . $row->uid . ']'] = $row->name;
+  }
+  print drupal_to_js($matches);
+  exit;
+}
+
+function civicrm_coupon_autocomplete_role($string) {
+  $matches = array();
+  $result = db_query_range("SELECT name FROM {role} WHERE name LIKE '%%%s%'", $string, 0, 10);
+  while ($row = db_fetch_object($result)) {
+    $matches[$row->name] = $row->name;
+  }
+  print drupal_to_js($matches);
+  exit;
+}
+
+/**
+ * Coupon report form.
+ */
+function civicrm_coupon_reports_form(&$form_state, $start = NULL, $end = NULL, $statuses = NULL) {
+  if (is_null($start)) {
+    $start = time();
+  }
+  if (is_null($end)) {
+    $end = time();
+  }
+  if (is_null($statuses)) {
+    $statuses = variable_get('civi_reports_reported_statuses', array('completed'));
+  }
+
+
+  $form['start'] = array(
+      '#type' => 'date',
+      '#title' => t('Start date'),
+      '#default_value' => array('year' => format_date($start, 'custom', 'Y'), 'month' => format_date($start, 'custom', 'n'), 'day' => format_date($start, 'custom', 'j')),
+      '#after_build' => array('_civicrm_coupon_date_range'),
+  );
+  $form['end'] = array(
+      '#type' => 'date',
+      '#title' => t('End date'),
+      '#default_value' => array('year' => format_date($end, 'custom', 'Y'), 'month' => format_date($end, 'custom', 'n'), 'day' => format_date($end, 'custom', 'j')),
+      '#after_build' => array('_civicrm_coupon_date_range'),
+  );
+
+  $form['submit'] = array(
+      '#type' => 'submit',
+      '#value' => t('Display report'),
+  );
+  return $form;
+}
+
+/**
+ * Handle form submit and assign variables
+ */
+function civicrm_coupon_reports_form_submit($form, &$form_state) {
+  $start = mktime(0, 0, 0, $form_state['values']['start']['month'], $form_state['values']['start']['day'], $form_state['values']['start']['year']);
+  $end = mktime(23, 59, 59, $form_state['values']['end']['month'], $form_state['values']['end']['day'], $form_state['values']['end']['year']);
+
+  $form_state['redirect'] = 'admin/settings/coupon/reports/' . $start . '/' . $end;
+}
+
+/**
+ * Output Coupon Reports
+ *
+ * To display coupon usage reports with links to civicrm invoices.
+ */
+function civicrm_coupon_reports($start = NULL, $end = NULL) {
+  drupal_add_css(drupal_get_path('module', 'civicrm_coupon') . '/reports.css', 'civicrm_coupon');
+
+  $output = drupal_get_form('civicrm_coupon_reports_form', $start, $end);
+
+  if (isset($start) && isset($end)) {
+    $query = db_query("SELECT co.cid, co.oid, co.value, co.code, o.total_amount order_total, UNIX_TIMESTAMP(o.receive_date) created FROM {civicrm_coupons_orders} AS co LEFT JOIN {civicrm_contribution} AS o ON (co.oid = o.id) WHERE UNIX_TIMESTAMP(o.receive_date) > %d AND UNIX_TIMESTAMP(o.receive_date) < %d ORDER BY co.cid, o.receive_date ASC", $start, $end);
+    $total = 0;
+
+    $row_header = array(t('Order #'), t('Purchase date'), t('Total'), t('Coupon value'));
+    $last_cid = 0;
+
+    while ($row = db_fetch_object($query)) {
+      // Display the table of coupons if this is the next set of coupons
+      if ($row->cid != $last_cid AND $last_cid != 0) {
+        $td[] = array('', '<b>' . t('Uses: @total', array('@total' => $num_uses)) . '</b>', '<b>' . civi_currency_format($coupon_sale_amount) . '</b>', '<b>' . civi_currency_format($coupon_amount) . '</b>');
+        $data .= theme('table', $row_header, $td, array('width' => '100%'));
+        $td = array();
+        $num_uses = 0;
+        $coupon_amount = 0;
+        $coupon_sale_amount = 0;
+      }
+      // if this is the first coupon of the set display the header first
+      if ($row->cid != $last_cid || $last_cid = 0) {
+        $data .= '<div class="totals">' . t('Coupon code: !link', array('!link' => l($row->code, 'admin/settings/coupon/' . $row->cid . '/edit'))) . '</div>';
+      }
+      $td[] = array(l('#' . $row->oid, 'civicrm/contact/view/contribution', array('query' => '&id=' . $row->oid . '&cid=' . $row->cid . '&action=view&selectedChild=contribute')), format_date($row->created, 'custom', variable_get('civi_date_format_default', 'm/d/Y')), civi_currency_format($row->order_total), civi_currency_format($row->value));
+      $num_uses++;
+      $coupon_amount += $row->value;
+      $coupon_sale_amount += $row->order_total;
+      $last_cid = $row->cid;
+      $orders_total += $row->order_total;
+      $coupons_total += $row->value;
+      $total++;
+    }
+    $td[] = array('', '<b>' . t('Uses: @total', array('@total' => $num_uses)) . '</b>', '<b>' . civi_currency_format($coupon_sale_amount) . '</b>', '<b>' . civi_currency_format($coupon_amount) . '</b>');
+    $data .= theme('table', $row_header, $td, array('width' => '100%'));
+
+    $output .= '<h2>' . t('Coupon usage report') . '</h2>';
+    $output .= $data;
+    $output .= '<br /><table width="100%"><tr>';
+    $output .= '<td>' . t('Coupons used: @total', array('@total' => $total)) . '</td>';
+    $output .= '<td>' . t('Orders total: @total', array('@total' => civi_currency_format($orders_total))) . '</td>';
+    $output .= '<td>' . t('Coupons total: @total', array('@total' => civi_currency_format($coupons_total))) . '</td>';
+    $output .= '</tr></table>';
+  }
+  return $output;
+}
+
+function civi_currency_format($amount) {
+  return "$" . $amount;
+}
+
+/**
+ *
+ * Implementation of hook_civicrm_buildForm().
+ *
+ * @param $formName
+ *     Id of the form whose event fees is to be manipulated.
+ * @param $form
+ *     The content of form passed by reference to apply the manipulations.
+ */
+function civicrm_coupon_civicrm_buildForm($formName, &$form) {
+  if ($formName == 'CRM_Event_Form_Registration_Register') {
+    $form->addElement('text', 'discountCode', ts('Discount Code'));
+    // also assign to template
+    $template = & CRM_Core_Smarty::singleton( );
+    $beginHookFormElements = $template->get_template_vars('beginHookFormElements');
+    if (!$beginHookFormElements) {
+      $beginHookFormElements = array();
+    }
+    $beginHookFormElements[] = 'discountCode';
+    $form->assign('beginHookFormElements', $beginHookFormElements);
+    $discountCode = _civicrm_coupon_couponfetcher($form);
+    $defaults = array('discountCode' => $discountCode);
+    $form->setDefaults($defaults);
+  }
+}
+
+/**
+ *
+ * Implementation of hook_civicrm_buildAmount().
+ *
+ * @param $pageType
+ *     Type of page to which manipulations are to be done.
+ * @param $form
+ *     The content of form passed by reference to apply the manipulations.
+ * @param $amount
+ *     Array of all amounts mentioned on the form.
+ */
+function civicrm_coupon_civicrm_buildAmount($pageType, &$form, &$amount) {
+  if ($pageType != 'event') {
+    return;
+  }
+
+  $discountCode = _civicrm_coupon_couponfetcher($form);
+  if ($discountCode) {
+    $coupon = civicrm_coupon_validation($discountCode);
+
+    if ($coupon->message != '' && $coupon->code != '') {
+      drupal_set_message($coupon->message, 'error');
+    };
+    if ($coupon->valid) {
+      $discount_reason = " <span style='color: green'>(" . ts($coupon->name) . " coupon)</span>";
+      switch ($coupon->type) {
+        case 'percentage':
+          foreach ($amount as $amountId => $amountInfo) {
+            $amount[$amountId]['value'] = $amount[$amountId]['value'] -
+                    ceil($amount[$amountId]['value'] * $coupon->value / 100);
+            $amount[$amountId]['label'] = $amount[$amountId]['label'] .
+                    "\t - with {$coupon->value}% discount" . $discount_reason;
+          }
+          break;
+        case 'price':
+          foreach ($amount as $amountId => $amountInfo) {
+            $amount[$amountId]['value'] = $amount[$amountId]['value'] -
+                    $coupon->value;
+            $amount[$amountId]['label'] = $amount[$amountId]['label'] .
+                    "\t - with $ {$coupon->value} discount" . $discount_reason;
+          }
+      }
+    }
+  }
+}
+
+function civicrm_coupon_civicrm_validate($formName, &$fields, &$files, &$form) {
+  // sample implementation
+  $errors = array();
+  if ($formName == 'CRM_Event_Form_Registration_Register') {
+    // ensure that external identifier is present and valid
+    $discountCode = CRM_Utils_Array::value('discountCode', $fields);
+    $coupon = civicrm_coupon_validation($discountCode);
+    if ($coupon->message) {
+      $errors['discountCode'] = ts($coupon->message);
+    }
+  }
+  return empty($errors) ? true : $errors;
+}
+
+/**
+ *
+ * Implementation of hook_civicrm_postProcess().
+ *
+ * @param $class
+ *     Id of the form whose event fees is to be manipulated.
+ * @param $form
+ *     The content of form passed by reference to apply the manipulations.
+ */
+function civicrm_coupon_civicrm_postProcess($class, &$form) {
+  if (!is_a($form, 'CRM_Event_Form_Registration_Confirm')) {
+    return;
+  }
+  $formParams = $form->getVar('_params');
+  $discountCode = _civicrm_coupon_couponfetcher($form);
+  if ($discountCode) {
+    $coupon = civicrm_coupon_validation($discountCode);
+    $query = "INSERT INTO civicrm_coupons_orders (cid, oid, code, value) VALUES (%1, %2, %3, %4)";
+    $params = array(1 => array($coupon->cid, 'Integer'),
+        2 => array($formParams['contributionID'], 'Integer'),
+        3 => array($coupon->code, 'String'),
+        4 => array($form->_totalAmount, 'Float'));
+    CRM_Core_DAO::executeQuery($query, $params);
+  }
+}
+
+/**
+ *
+ * @return Coupon code depending on situation.
+ */
+function _civicrm_coupon_couponfetcher($form) {
+  return CRM_Utils_Request::retrieve('discountCode', 'String', $form, false, null, $_REQUEST);
+}

@@ -1,0 +1,6 @@
+; $Id$
+name = "CiviCRM Coupons"
+description = "Provides discount coupons for Civicrm Events."
+dependencies[] = civicrm
+package = CiviCRM
+core = 6.x

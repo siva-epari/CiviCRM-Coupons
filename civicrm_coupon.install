@@ -1,0 +1,140 @@
+<?php
+
+// $Id$
+/**
+ * @file civicrm_coupon.install
+ * TODO: Enter file description here.
+ */
+
+/**
+ * Implementation of hook_schema().
+ */
+function civicrm_coupon_schema() {
+  $schema = array();
+
+  $schema['civicrm_coupons'] = array(
+      'description' => t('Civicrm Coupons'),
+      'fields' => array(
+          'cid' => array(
+              'type' => 'serial',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+          ),
+          'name' => array(
+              'type' => 'varchar',
+              'length' => 30,
+              'not null' => TRUE,
+              'default' => '',
+          ),
+          'code' => array(
+              'type' => 'varchar',
+              'length' => 40,
+              'not null' => TRUE,
+              'default' => '',
+          ),
+          'value' => array(
+              'type' => 'numeric',
+              'precision' => 6,
+              'scale' => 2,
+              'not null' => TRUE,
+              'default' => 0,
+          ),
+          'type' => array(
+              'type' => 'varchar',
+              'length' => '12',
+              'not null' => TRUE,
+              'default' => 'price',
+          ),
+          'status' => array(
+              'type' => 'int',
+              'size' => 'tiny',
+              'not null' => TRUE,
+              'default' => 1,
+          ),
+          'valid_until' => array(
+              'type' => 'int',
+          ),
+          'max_uses' => array(
+              'type' => 'int',
+              'size' => 'small',
+              'not null' => TRUE,
+              'default' => 0,
+          ),
+          'minimum_order' => array(
+              'type' => 'numeric',
+              'precision' => 6,
+              'scale' => 2,
+              'not null' => TRUE,
+              'default' => 0,
+          ),
+          'data' => array(
+              'type' => 'text',
+          ),
+          'bulk' => array(
+              'type' => 'int',
+              'size' => 'tiny',
+              'not null' => TRUE,
+              'default' => 0,
+          ),
+          'bulk_seed' => array(
+              'type' => 'char',
+              'length' => 32,
+              'not null' => TRUE,
+              'default' => '',
+          ),
+      ),
+      'primary key' => array('cid'),
+  );
+  $schema['civicrm_coupons_orders'] = array(
+      'description' => t('Civicrm Coupons used on Registrations'),
+      'fields' => array(
+          'cuid' => array(
+              'type' => 'serial',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+          ),
+          'cid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'default' => 0,
+          ),
+          'oid' => array(
+              'type' => 'int',
+              'unsigned' => TRUE,
+              'not null' => TRUE,
+              'default' => 0,
+          ),
+          'value' => array(
+              'type' => 'numeric',
+              'precision' => 10,
+              'scale' => 2,
+              'not null' => TRUE,
+              'default' => 0,
+          ),
+          'code' => array(
+              'type' => 'varchar',
+              'length' => 40,
+              'not null' => TRUE,
+              'default' => 'default_code',
+          ),
+      ),
+      'primary key' => array('cuid'),
+  );
+  return $schema;
+}
+
+/**
+ * Implementation of hook_install().
+ */
+function civicrm_coupon_install() {
+  drupal_install_schema('civicrm_coupon');
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function civicrm_coupon_uninstall() {
+  drupal_uninstall_schema('civicrm_coupon');
+}
+
